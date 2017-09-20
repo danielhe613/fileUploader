@@ -10,13 +10,27 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	_ "net/http/pprof"
+
+	promhttp "github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/version"
+	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
-//FileUploadURL is the URL of File Upload Server.
-var FileUploadURL string
+var (
+	monitorAddr = kingpin.Flag("monitor.listen-address", "Address on which to expose metrics and pprof web interface.").Default(":9211").String()
 
-//FolderScanInterval is the time interval to scan the metric data file folder
-var FolderScanInterval time.Duration
+	fileUploadAddr = kingpin.Flag("upload.address", "The address to upload file to.").Default("localhost:8080").String()
+
+	scanInterval = kingpin.Flag("scan.interval", "The interval (unit = second) to scan files to upload.").Default("1").Int64()
+
+	//FolderScanInterval is the time interval to scan the metric data file folder
+	FolderScanInterval time.Duration
+
+	//FileUploadURL is the URL of File Upload Server.
+	FileUploadURL string
+)
 
 //coordinate is responsible to scan the metric data files located folder and sends the new filename to todo channel (for file uploading)
 func coordinate(wg *sync.WaitGroup, todo chan<- string, done <-chan string, quit <-chan int) {
@@ -113,16 +127,40 @@ func doUpload(filename string) {
 	}
 }
 
+func launchMonitor(monitorAddr *string, wg *sync.WaitGroup) {
+	http.Handle("/metrics", promhttp.Handler())
+	log.Println(http.ListenAndServe(*monitorAddr, nil))
+}
+
+func setReleaseInfo() {
+	//	log.AddFlags(kingpin.CommandLine)
+	version.BuildUser = "lhe"
+	version.BuildDate = "2017.9.20 16:30"
+	version.Version = "v1.0.0"
+	version.Branch = "master"
+	version.Revision = "234a23"
+	kingpin.Version(version.Print("fileUploader"))
+}
+
+func parseCommandLine() {
+	setReleaseInfo()
+
+	kingpin.HelpFlag.Short('h')
+
+	kingpin.Parse()
+}
+
+//config loading
+//logging
+//arguments
+//gracefully shutdown
 func main() {
 
-	//config loading
-	//logging
-	//arguments
-	//gracefully shutdown
+	parseCommandLine()
 
 	//Initialization
-	FileUploadURL = "http://localhost:8080/"
-	FolderScanInterval = time.Second * 1
+	FileUploadURL = "http://" + *fileUploadAddr + "/"
+	FolderScanInterval = time.Second * time.Duration(*scanInterval)
 
 	var (
 		//Channel for filename to import
@@ -136,17 +174,27 @@ func main() {
 		wg = new(sync.WaitGroup)
 	)
 
+	//Launch goroutines
 	rnum := 2
 	go coordinate(wg, todo, done, quit)
 	go uploadFile(1, wg, todo, done, quit)
+
+	go launchMonitor(monitorAddr, wg)
 
 	//Send quit to goroutines if any signals from OS for gracefully shutdown.
 	sc := make(chan os.Signal)
 	signal.Notify(sc, syscall.SIGINT, os.Interrupt, os.Kill)
 	<-sc
+
 	for i := 0; i < rnum; i++ {
 		quit <- i
 	}
 	wg.Wait()
+
+	//Close the channels
+	close(todo)
+	close(done)
+	close(quit)
+
 	log.Println("Importer exits! See you later!")
 }
