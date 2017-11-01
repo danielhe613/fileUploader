@@ -180,6 +180,9 @@ func main() {
 	go uploadFile(1, wg, todo, done, quit)
 
 	go launchMonitor(monitorAddr, wg)
+	//TODO:
+	//Add gauge metric last_scan_file_total
+	//Add counter metric upload_failure_total
 
 	//Send quit to goroutines if any signals from OS for gracefully shutdown.
 	sc := make(chan os.Signal)
